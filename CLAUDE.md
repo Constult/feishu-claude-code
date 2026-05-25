@@ -2,6 +2,8 @@
 
 飞书 ↔ Claude Code 桥接器。Python 进程通过 lark-cli WebSocket 接收飞书消息，调用本地 `claude` CLI 生成回复，以流式卡片返回到飞书。
 
+> **状态：稳定运行** — 2026年5月起长期稳定，无已知 bug。历史踩坑记录见 memory。
+
 ## 架构
 
 ```
