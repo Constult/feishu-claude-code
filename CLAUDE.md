@@ -32,14 +32,23 @@ main.py ──事件分发──→ handle_message_from_cli()
 - **改代码后清缓存**：`rm -rf __pycache__`，否则 Python 可能跑旧的 .pyc
 - **JSON 输出不乱码**：所有 `subprocess.Popen` 必须显式 `encoding="utf-8"`
 
+## 注意
+
+**桥跑在你的电脑上，不是服务器。** 关机、重启、待机——桥就停了。之前一直正常是因为没关过机。断连后手动 `python main.py` 重启即可。
+
+**必须前台跑。** 不要在后台模式启动（`start /B`、`nohup`、`&`），Windows 下后台 stdin 关闭会导致 lark-cli 子进程 stdout 立即 EOF，陷入死循环重连。Claude Code 升级后（2.1.152+）这个行为更加明显。正确做法：打开新终端窗口跑 `python main.py`，或双击 `start_bridge.bat`。
+
+### Claude Code 升级注意
+升级 Claude Code 后如果桥出现"连接→EOF→重连"死循环，先检查是否在后台模式启动。进新终端前台跑即可。**不需要重装依赖、清缓存、改代码。**
+
 ## 启动 / 停止
 
 ```bash
 # 手动启动（foreground）
 python main.py
 
-# 后台启动
-# Windows: start_bridge.bat（已注册到 HKCU Run 键，登录自动启动）
+# 开机自启
+# Windows: start_bridge.bat 已注册到 HKCU Run 键
 # macOS: launchctl load ~/Library/LaunchAgents/com.zara.feishu-claude.plist
 
 # 完全停止

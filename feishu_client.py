@@ -10,6 +10,8 @@ import tempfile
 import time
 from typing import Optional
 
+import httpx
+import lark_oapi
 import lark_oapi as lark
 from lark_oapi.api.im.v1.model import (
     CreateMessageRequest,
@@ -19,6 +21,57 @@ from lark_oapi.api.im.v1.model import (
     ReplyMessageRequest,
     ReplyMessageRequestBody,
 )
+from lark_oapi.core.http.transport import Transport, _build_url, _build_header, _merge_dicts
+
+
+# ── Monkey-patch: 持久 httpx 连接池，避免每次请求重新建连 ──
+
+_patched_client: Optional[httpx.AsyncClient] = None
+_patched_original_aexecute = Transport.aexecute
+
+
+@staticmethod
+async def _patched_aexecute(conf, req, option=None):
+    global _patched_client
+    if _patched_client is None or _patched_client.is_closed:
+        _patched_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            timeout=httpx.Timeout(30.0, connect=10.0),
+        )
+    if option is None:
+        option = lark_oapi.core.model.RequestOption()
+
+    url = _build_url(conf.domain, req.uri, req.paths)
+    headers = _build_header(req, option, conf)
+
+    json_, files, data = None, None, None
+    if req.files:
+        files = req.files
+        if req.body is not None:
+            data = json.loads(lark_oapi.core.json.JSON.marshal(req.body))
+    elif req.body is not None:
+        json_ = json.loads(lark_oapi.core.json.JSON.marshal(req.body))
+
+    client = _patched_client
+    response = await client.request(
+        str(req.http_method.name),
+        url,
+        headers=req.headers,
+        params=req.queries,
+        json=json_,
+        data=data,
+        files=files,
+        timeout=conf.timeout,
+    )
+
+    resp = lark_oapi.core.model.RawResponse()
+    resp.status_code = response.status_code
+    resp.headers = dict(response.headers)
+    resp.content = response.content
+    return resp
+
+
+Transport.aexecute = _patched_aexecute
 
 
 def _card_json(content: str, loading: bool = False) -> str:
@@ -106,7 +159,7 @@ class FeishuClient:
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
-                    print(f"[retry] 第 {attempt + 1} 次失败，{delay:.1f}s 后重试: {e}", flush=True)
+                    print(f"[retry] 第 {attempt + 1} 次失败，{delay:.1f}s 后重试: {type(e).__name__}: {e}", flush=True)
                     await asyncio.sleep(delay)
                     delay *= 2  # 指数退避
                 else:
@@ -177,6 +230,26 @@ class FeishuClient:
                 raise RuntimeError(f"patch 卡片失败: {resp.code} {resp.msg}")
 
         await self._retry_with_backoff(_update, max_retries=3)
+
+    async def update_card_fast(self, message_id: str, content: str) -> bool:
+        """流式推送用：失败不重试，直接跳过等下一帧。返回是否成功"""
+        try:
+            req = (
+                PatchMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(
+                    PatchMessageRequestBody.builder()
+                    .content(_card_json(content, loading=False))
+                    .build()
+                )
+                .build()
+            )
+            resp = await self.client.im.v1.message.apatch(req)
+            if not resp.success():
+                return False
+            return True
+        except Exception:
+            return False
 
     async def download_image(self, message_id: str, image_key: str) -> str:
         """下载飞书图片到临时文件，返回本地路径（不阻塞事件循环）"""

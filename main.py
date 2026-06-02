@@ -1094,22 +1094,18 @@ async def _run_and_display(
     last_push_time = 0.0
     push_failures = 0
     switched_to_doc = False
-    _DOC_SWITCH_THRESHOLD = 30    # 超过此字数自动切文档（降低阈值，更快切文档模式）
-    _MIN_CHUNK = 80               # 新增 80 字才推
-    _MIN_INTERVAL = 0.8           # 最小间隔，不轰炸 API（适配慢模型）
-    _MAX_INTERVAL = 2.0           # 最大间隔，保证不卡住（适配慢模型）
+    _DOC_SWITCH_THRESHOLD = 30    # 超过此字数自动切文档（长文直接出飞书文档，比流式卡片快）
     _MAX_STREAM_DISPLAY = 2500
 
     async def push(content: str):
         nonlocal push_failures
         if push_failures >= 3:
             return
-        try:
-            await feishu.update_card(card_msg_id, content)
+        ok = await feishu.update_card_fast(card_msg_id, content)
+        if ok:
             push_failures = 0
-        except Exception as push_err:
+        else:
             push_failures += 1
-            print(f"[warn] push 失败 ({push_failures}/3): {push_err}", flush=True)
 
     def _build_display() -> str:
         parts = []
@@ -1183,7 +1179,8 @@ async def _run_and_display(
             return
 
         new_chars = len(accumulated) - last_pushed_len
-        if (new_chars >= _MIN_CHUNK and elapsed >= _MIN_INTERVAL) or (elapsed >= _MAX_INTERVAL and new_chars > 0):
+        # 预文档阶段（<30字）：0.5s 快推，保证流式体验不卡顿
+        if elapsed >= 0.5 and new_chars > 0:
             await push(_build_display())
             last_push_time = now
             last_pushed_len = len(accumulated)
